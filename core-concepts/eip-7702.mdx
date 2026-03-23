@@ -1,0 +1,108 @@
+---
+title: "EIP-7702 & Zero Prefunding"
+description: "How Echo uses EIP-7702 delegation to let AI agents swap tokens directly from your EOA — no pre-deposit, no private key handover."
+---
+
+The most common friction point in AI-driven DeFi is custody: either the agent holds your private key (dangerous) or you pre-deposit tokens into a smart account (inconvenient and capital-inefficient). Echo eliminates both problems using EIP-7702.
+
+---
+
+## The problem with pure ERC-4337
+
+ERC-4337 account abstraction is powerful, but it introduces a structural issue for AI agents:
+
+In standard ERC-4337, the `UserOp.sender` is a **Smart Account (SA)** — a deployed contract, not your original EOA. When the Smart Account calls Uniswap, `msg.sender` at the Uniswap router is the Smart Account address.
+
+Uniswap uses `msg.sender` to pull tokens via `transferFrom`. This means:
+
+```
+User EOA  ──tokens──→  Smart Account  ──→  Uniswap
+                           ↑
+                    tokens must be here
+                    before the swap
+```
+
+To execute a swap, you must first move tokens from your EOA into the Smart Account. Every time. This is the pre-deposit problem — capital sits idle in a contract, not in your wallet.
+
+---
+
+## How EIP-7702 solves it
+
+EIP-7702 introduces a new transaction type (type 4) that lets an EOA **temporarily install bytecode** at its own address via a signed authorization. Echo uses this to install `EchoDelegationModule` as the delegation target on your EOA.
+
+After activation, your EOA address *is* the smart contract entry point. When a UserOperation is submitted with your EOA as `UserOp.sender`:
+
+- `EchoDelegationModule.validateUserOp()` runs at your EOA address
+- `EchoDelegationModule.execute()` calls Uniswap with `msg.sender = your EOA`
+- Uniswap pulls tokens directly from your EOA via `transferFrom`
+
+```
+AI Agent
+   │
+   ▼
+UserOperation (sender = your EOA)
+   │
+   ▼
+EchoDelegationModule (installed on your EOA via EIP-7702)
+   │  validateUserOp() → checks policy + signature
+   │  execute()        → calls Uniswap
+   ▼
+Uniswap Router
+   │  msg.sender = your EOA
+   ▼
+transferFrom(your EOA, pool, amount)
+   │
+   ▼
+tokens move directly from your EOA
+```
+
+No pre-deposit. No intermediate contract holding your funds. Tokens stay in your wallet until the moment of the swap.
+
+---
+
+## One-time activation
+
+The EIP-7702 delegation is activated once via a **type-4 transaction** during onboarding. This transaction:
+
+1. Signs an EIP-7702 authorization — `{ chainId, address: EchoDelegationModule, nonce }` — inside your mobile wallet
+2. Includes that authorization in a transaction that calls `EchoOnboarding.registerInstanceAndEip7702()`
+3. Registers your `PolicyInstance` on-chain at the same time
+
+Once confirmed on-chain, the delegation code (`EchoDelegationModule`) is installed at your EOA address **permanently**. Future UserOperations do not need any EIP-7702 authorization attached — the module is already there.
+
+<Note>
+  The delegation is scoped to the chain it was activated on. A Sepolia activation does not affect mainnet and vice versa.
+</Note>
+
+---
+
+## Automatic token approvals
+
+Before each swap, `EchoDelegationModule` calls an internal `_autoApprove()` function. This checks whether the Uniswap router already has sufficient allowance to spend your tokens. If not, it calls `ERC20.approve(router, type(uint256).max)`.
+
+The behavior:
+
+| Situation | Action | Gas cost |
+|---|---|---|
+| First swap of a given token | `approve(router, max)` | ~45,000 gas |
+| Subsequent swaps of same token | No-op (allowance already max) | 0 additional gas |
+
+By setting a max allowance on first use, Echo avoids approval transactions on every swap. The approve call is bundled into the same UserOperation as the swap — it is atomic and never results in a dangling approval without a corresponding swap.
+
+The `_autoApprove()` function supports all Uniswap V3 swap selectors:
+- `exactInputSingle`
+- `exactOutputSingle`
+- `exactInput` (multi-hop)
+
+---
+
+## Security properties
+
+Echo's architecture is designed so that even if the gateway is compromised, an attacker cannot exceed your policy limits:
+
+- The execute key (stored encrypted in the gateway) can only sign UserOps
+- Every UserOp is validated on-chain by `EchoPolicyValidator` before execution
+- If the UserOp exceeds your daily cap, per-tx limit, or uses a non-whitelisted token, the validator reverts the operation
+- The execute key **cannot** send regular ETH transactions or sign arbitrary messages — it can only submit UserOps that pass policy validation
+
+See [On-Chain Enforcement](/core-concepts/on-chain-enforcement) for the full validation flow.

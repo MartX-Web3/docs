@@ -1,0 +1,93 @@
+---
+title: "Contract Addresses"
+description: "Deployed contract addresses for the Echo Protocol on Sepolia testnet. Mainnet addresses will be published at launch."
+---
+
+All Echo Protocol contracts are currently deployed on **Sepolia testnet** (chain ID `11155111`). Mainnet deployments on Ethereum, Base, and Arbitrum are planned for Q2 2026.
+
+<Note>
+  The contracts below were deployed on 2026-03-20. If you are building integrations or running tests, always verify addresses against this page or the `echo_get_context` MCP tool response.
+</Note>
+
+---
+
+## Core protocol contracts
+
+| Contract | Address | Description |
+|---|---|---|
+| `PolicyRegistry` | `0xd5Db48763809061cFc283bF51Df1F158BD237120` | Stores PolicyInstances and SessionPolicies on-chain |
+| `EchoPolicyValidator` | `0xe4fecb0138Ff8E7aDC72b1F142fcbdCAcF12F554` | Validates every UserOp against policy rules before execution |
+| `EchoDelegationModule` | `0x9aeAF3881FC24A639434C4e849C52341E8b1cc15` | EIP-7702 delegation target; implements `validateUserOp` + `execute` |
+| `EchoOnboarding` | `0x6622fe1A7612Dc85aAd42F2D326a7a7572aB4805` | One-transaction onboarding: registerInstance + activate EIP-7702 |
+| `IntentRegistry` | `0x9c3c066a6dCbD5ea565171D61F7965B6319567fc` | Append-only audit log of all executed intents |
+
+### Etherscan links (Sepolia)
+
+- [PolicyRegistry](https://sepolia.etherscan.io/address/0xd5Db48763809061cFc283bF51Df1F158BD237120)
+- [EchoPolicyValidator](https://sepolia.etherscan.io/address/0xe4fecb0138Ff8E7aDC72b1F142fcbdCAcF12F554)
+- [EchoDelegationModule](https://sepolia.etherscan.io/address/0x9aeAF3881FC24A639434C4e849C52341E8b1cc15)
+- [EchoOnboarding](https://sepolia.etherscan.io/address/0x6622fe1A7612Dc85aAd42F2D326a7a7572aB4805)
+- [IntentRegistry](https://sepolia.etherscan.io/address/0x9c3c066a6dCbD5ea565171D61F7965B6319567fc)
+
+---
+
+## Mock contracts (Sepolia testnet only)
+
+These mocks simulate Uniswap V3 router and quoter interfaces for testing on Sepolia.
+
+| Contract | Address | Description |
+|---|---|---|
+| `MockSwapRouter` | `0x37bFb0Bc15411FfA581732a0cE2aeb5A943cC75B` | Simulates Uniswap V3 SwapRouter for local testing |
+| `MockQuoterV2` | `0x50F359Ae6a5A7796faF45d9D2D54EEa29BBEfe60` | Returns mock swap quotes for fee-tier auto-detection |
+| `MockWETH` | `0xF0527287E6B7570BdaaDe7629C47D60a3e0eF104` | Wrapped Ether test token (18 decimals) |
+| `MockUSDC` | `0xBa9D46448e4142AC7a678678eFf6882D9197d716` | USD Coin test token (6 decimals) |
+
+<Warning>
+  MockWETH and MockUSDC are test tokens with no real value. Do not use these addresses for mainnet interactions.
+</Warning>
+
+---
+
+## Policy template IDs
+
+Policy templates are registered on-chain in `PolicyRegistry`. Reference them by ID when creating a new `PolicyInstance`.
+
+| Template | ID |
+|---|---|
+| Conservative | `0x153ccd56661fc5ac2a443a0426cb294076170bb32bd17f75580ae627fa64ea99` |
+| Standard | `0x039a844943398a8fa17d671b48de13f72a9218515234641653363b612011a971` |
+| Active | `0xb770bc267d97571e554e0ea0bc0cfde88e7d5d7fed3ebc83bb964bdf791ac4ea` |
+
+See [Policy System](/core-concepts/policy#policy-templates) for a comparison of template parameters.
+
+---
+
+## Deployer address
+
+All contracts were deployed by:
+
+```
+0xE00B309C1a672FF61660EcA01Dbf50c4fD1F9fA8
+```
+
+[View on Etherscan](https://sepolia.etherscan.io/address/0xE00B309C1a672FF61660EcA01Dbf50c4fD1F9fA8)
+
+---
+
+## Mainnet
+
+Mainnet contract addresses for Ethereum, Base, and Arbitrum will be published here at launch (planned Q2 2026). Subscribe to the Echo Protocol [Discord](https://discord.gg/echo-protocol) or [Twitter](https://twitter.com/echo_protocol) to be notified.
+
+---
+
+## Verifying contracts
+
+All Echo Protocol contracts are verified on Etherscan. You can read the source code, ABI, and storage layout for each contract by following the Etherscan links above and clicking the **Contract** tab.
+
+To verify a contract address programmatically, check that `eth_getCode` at the address returns non-empty bytecode on Sepolia:
+
+```bash
+cast code 0x9aeAF3881FC24A639434C4e849C52341E8b1cc15 --rpc-url $SEPOLIA_RPC_URL
+```
+
+A non-`0x` response confirms the contract is deployed at that address.

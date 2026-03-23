@@ -1,0 +1,162 @@
+---
+title: "Custom Protocols & Tools"
+description: "How to extend Echo Protocol beyond Uniswap swaps — adding support for Aave, Curve, GMX, and custom MCP tools."
+---
+
+Echo Protocol is designed to be extensible. While the initial release focuses on Uniswap V3 swaps, the architecture supports arbitrary DeFi protocols through a protocol adapter interface, and the MCP tool layer can be extended with custom tools that expose new agent capabilities.
+
+---
+
+## The protocol adapter interface (coming soon)
+
+Echo's internal execution path goes through `EchoDelegationModule.execute()`, which decodes and dispatches the target calldata. In the current version, this dispatcher is hardcoded for Uniswap V3 swap selectors (`exactInputSingle`, `exactOutputSingle`, `exactInput`).
+
+The roadmap includes a **protocol adapter interface** that will allow new protocol integrations to be registered without modifying the core module. The conceptual interface looks like this:
+
+```typescript
+interface ProtocolAdapter {
+  // Identifier used in policy token whitelists and intent routing
+  protocolId: string;
+
+  // Selectors this adapter handles
+  supportedSelectors: string[];
+
+  // Build calldata for a given intent
+  buildCalldata(intent: IntentParams): Promise<string>;
+
+  // Extract tokenIn, tokenOut, amount from raw calldata (for policy validation)
+  parseIntent(calldata: string): ParsedIntent;
+
+  // Optional: pre-execution checks (e.g. health factor for Aave)
+  preCheck?(context: ExecutionContext): Promise<void>;
+}
+```
+
+When a protocol adapter is registered, `EchoDelegationModule` routes intents matching its selectors through the adapter's calldata builder, and `EchoPolicyValidator` uses the adapter's `parseIntent` to extract amounts and tokens for policy checks.
+
+---
+
+## Planned protocol integrations
+
+The following integrations are on the Echo roadmap (Q3 2026 and beyond):
+
+### Aave v3 (lending)
+
+```
+Supported operations:
+- supply(asset, amount, onBehalfOf)
+- withdraw(asset, amount, to)
+- borrow(asset, amount, interestRateMode, onBehalfOf)
+- repay(asset, amount, interestRateMode, onBehalfOf)
+
+Policy extensions needed:
+- maxHealthFactor floor (reject borrows that drop HF below threshold)
+- assetWhitelist (separate from swap tokenWhitelist)
+- maxLTV cap
+```
+
+### Curve Finance
+
+```
+Supported operations:
+- exchange(i, j, dx, min_dy) — stable swaps
+- add_liquidity / remove_liquidity — LP management
+
+Policy extensions needed:
+- lpTokenWhitelist
+- maxSlippage (already exists in MetaPolicy)
+```
+
+### GMX v2 (perpetuals)
+
+```
+Supported operations:
+- createOrder (market/limit long/short)
+- cancelOrder
+
+Policy extensions needed:
+- maxLeverage cap
+- maxPositionSize
+- allowedMarkets whitelist
+```
+
+<Note>
+  None of these integrations are implemented in the current release. If you need one urgently, open an issue on GitHub or reach out on Discord.
+</Note>
+
+---
+
+## Extending the MCP tool layer
+
+The gateway's MCP tools are defined in `src/McpServer.ts`. Adding a custom tool requires:
+
+1. Defining the tool schema (name, description, input schema)
+2. Implementing the handler function
+3. Registering it with the MCP server instance
+
+Here is a minimal example of adding a custom tool that reads an Aave position:
+
+```typescript src/McpServer.ts
+// Add inside the McpServer class, alongside existing tool registrations
+
+server.addTool({
+  name: "echo_get_aave_position",
+  description: "Read the current Aave v3 position for the active EOA.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      instanceId: {
+        type: "string",
+        description: "PolicyInstance ID. Defaults to active instance.",
+      },
+    },
+    required: [],
+  },
+  handler: async (args) => {
+    const context = await keyStore.loadContext();
+    const eoa = context.eoa;
+
+    // Call Aave's PoolDataProvider to read user position
+    const position = await aaveAdapter.getUserPosition(eoa);
+
+    return {
+      collateral: position.totalCollateralBase,
+      debt: position.totalDebtBase,
+      healthFactor: position.healthFactor,
+      ltv: position.currentLtv,
+    };
+  },
+});
+```
+
+### Guidelines for custom tools
+
+- **Read-only tools** (balance checks, price quotes, position reads) can be added freely — they carry no execution risk.
+- **Write tools** (submit transactions, approve tokens) should go through the `UserOpBuilder` pipeline so they are subject to policy validation. Never bypass the `PreValidator` for write operations.
+- **Tool naming**: use the `echo_` prefix for tools that interact with the Echo policy system. Use a different prefix (e.g. `defi_`) for protocol-specific tools that do not touch the policy layer.
+- **Error handling**: always return structured errors that the AI agent can interpret. Use the same error codes as the core tools (`POLICY_VIOLATED`, `INSUFFICIENT_BALANCE`, etc.) where applicable.
+
+---
+
+## Custom policy parameters
+
+For protocols that require new policy dimensions (e.g. max leverage for GMX, health factor floor for Aave), you can extend the `MetaPolicy` struct in `PolicyRegistry.sol` and add corresponding checks to `EchoPolicyValidator.sol`.
+
+This is an advanced operation that requires:
+1. Deploying a new `EchoPolicyValidator` implementation
+2. Updating `PolicyRegistry` to point to the new validator
+3. Migrating existing `PolicyInstance` records
+
+The roadmap includes a **Policy Marketplace** (Q3 2026) where community-built policy templates — including protocol-specific ones — can be shared and installed by users without requiring custom contract deployments.
+
+---
+
+## Contributing
+
+Protocol adapter contributions are welcome on the Echo Protocol GitHub repository. The recommended approach:
+
+1. Open an issue describing the protocol you want to add and the operations you want to support
+2. Discuss the required policy extensions with the core team
+3. Submit a PR with the adapter implementation, tests, and documentation
+
+All adapters must include a comprehensive test suite against a local fork of the target protocol.

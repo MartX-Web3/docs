@@ -1,0 +1,236 @@
+---
+title: "Debugging & Troubleshooting"
+description: "Common errors, their causes, and how to fix them. Plus how to check delegation status, manage logs, and execute an emergency pause."
+---
+
+This page covers every common error you might encounter when running Echo Protocol, along with diagnostic steps and fixes.
+
+---
+
+## Error reference
+
+| Error Code | Where it appears | Cause | Fix |
+|---|---|---|---|
+| `POLICY_VIOLATED` | UserOp revert | Spend limit exceeded, token not whitelisted, or slippage too high | Check your policy limits via `echo_get_policy`; reduce amount, change token, or update policy |
+| `POLICY_PAUSED` | UserOp revert | The PolicyInstance has been paused | Unpause from the dashboard; see below |
+| `SESSION_EXPIRED` | UserOp revert | The session's `sessionExpiry` timestamp has passed | Create a new session with `echo_create_session` |
+| `INSUFFICIENT_BALANCE` | UserOp revert | The user EOA does not hold enough of `tokenIn` | Send tokens to your EOA; no pre-deposit into a contract is needed |
+| `EIP7702_NOT_ACTIVE` | Gateway pre-check | The EIP-7702 delegation has not been activated | Go to Settings in the dashboard and scan the QR code to activate |
+| `INVALID_SIGNATURE` | UserOp revert | Execute key or session key mismatch | Verify `KEYSTORE_PASSPHRASE` is correct; check keystore is not corrupted |
+| `SESSION_BUDGET_EXHAUSTED` | UserOp revert | `totalBudget` for the session has been fully spent | Create a new session with a fresh budget |
+| `SESSION_OPS_LIMIT_REACHED` | UserOp revert | `maxOpsPerDay` for the session was hit today | Wait until the next calendar day or create a new session with a higher limit |
+| `BUNDLER_REJECTED` | Gateway HTTP response | Pimlico bundler rejected the UserOp (usually gas estimation failure) | Check RPC connectivity; verify Pimlico API key; check token approvals |
+| `GATEWAY_UNREACHABLE` | MCP tool response | Claude Desktop cannot connect to the gateway process | Verify the gateway is running; check `GATEWAY_PORT`; restart Claude Desktop |
+
+---
+
+## POLICY_VIOLATED
+
+This is the most common error. It means the on-chain validator rejected the UserOp because one of the policy rules was not met.
+
+**Diagnosis:**
+
+```bash
+# Ask the agent to check your current policy state
+You: What are my current policy limits and how much have I spent today?
+Agent: [calls echo_get_policy]
+```
+
+**Common sub-causes:**
+
+1. **Daily cap reached** — `dailySpend >= dailyCap`. Wait until the daily reset (midnight UTC) or update your policy template to a higher cap.
+
+2. **Per-tx limit exceeded** — `amount > perTxMax`. Break the swap into smaller amounts or update your policy.
+
+3. **Token not whitelisted** — The token you are trying to trade is not in `tokenWhitelist`. Add it via the dashboard's Policy Settings.
+
+4. **Slippage too high** — The `slippageBps` parameter exceeds your `slippageCap`. Lower the requested slippage or update your policy.
+
+---
+
+## POLICY_PAUSED
+
+The instance is paused. No operations will execute until it is unpaused.
+
+**To unpause:**
+1. Open the dashboard at `http://localhost:3000`
+2. Navigate to **Policy Settings**
+3. Click **Unpause Instance**
+4. Sign the transaction via WalletConnect
+5. Wait for confirmation (~15 seconds on Sepolia)
+
+The agent cannot unpause on its own — this is a deliberate safety constraint.
+
+---
+
+## EIP7702_NOT_ACTIVE
+
+The EIP-7702 delegation has not been activated, or was revoked.
+
+**Diagnosis:**
+
+Check delegation status by reading the code at your EOA address:
+
+```bash
+cast code YOUR_EOA_ADDRESS --rpc-url $SEPOLIA_RPC_URL
+```
+
+- If the result is `0x` — delegation is not active. Go through the onboarding flow.
+- If the result is non-empty bytecode starting with `0xef0100` followed by the `EchoDelegationModule` address — delegation is active.
+
+Alternatively, check from within Ethereum via a node call:
+
+```javascript
+const code = await provider.getCode("YOUR_EOA_ADDRESS");
+// Active: code !== "0x"
+// Inactive: code === "0x"
+```
+
+**To fix:**
+Navigate to **Settings** in the dashboard and click **Activate Delegation**. Scan the QR code with your mobile wallet and approve the activation transaction.
+
+---
+
+## Revoking EIP-7702 delegation
+
+If you want to remove the delegation from your EOA entirely — for example, when decommissioning an Echo instance — send a type-4 transaction with the delegation target set to the zero address.
+
+**Using cast (Foundry):**
+
+```bash
+# This sends a type-4 tx that revokes all EIP-7702 delegation on your EOA
+cast send \
+  --private-key YOUR_PRIVATE_KEY \
+  --rpc-url $SEPOLIA_RPC_URL \
+  --auth 0x0000000000000000000000000000000000000000 \
+  YOUR_EOA_ADDRESS \
+  ""
+```
+
+**Using a wallet:**
+Most mobile wallets that support EIP-7702 activation also support revocation by signing an authorization with the zero address. Check your wallet's documentation.
+
+After revocation, `eth_getCode` on your EOA will return `0x`. The gateway will surface `EIP7702_NOT_ACTIVE` on the next tool call.
+
+<Warning>
+  Revoking delegation does not remove your PolicyInstance from `PolicyRegistry`. If you re-activate delegation later (with the same or a new module address), you can resume using the same instance.
+</Warning>
+
+---
+
+## INSUFFICIENT_BALANCE
+
+Your EOA does not hold enough of the input token. Echo does not require pre-depositing tokens — but tokens must be in your EOA at the time of the swap.
+
+**Check balances:**
+
+```bash
+# USDC balance (6 decimals)
+cast call 0xBa9D46448e4142AC7a678678eFf6882D9197d716 \
+  "balanceOf(address)(uint256)" YOUR_EOA \
+  --rpc-url $SEPOLIA_RPC_URL
+
+# WETH balance (18 decimals)
+cast call 0xF0527287E6B7570BdaaDe7629C47D60a3e0eF104 \
+  "balanceOf(address)(uint256)" YOUR_EOA \
+  --rpc-url $SEPOLIA_RPC_URL
+```
+
+On Sepolia, get test USDC and WETH by calling the `mint()` function on the mock token contracts, or use the faucet in the dashboard.
+
+---
+
+## Gateway logs
+
+By default, the gateway logs at `info` level to stdout. To increase verbosity:
+
+```bash .env
+LOG_LEVEL=debug
+```
+
+Or set it inline:
+
+```bash
+LOG_LEVEL=debug gateway start
+```
+
+**Log levels and what they show:**
+
+| Level | Contents |
+|---|---|
+| `error` | Fatal errors only |
+| `warn` | Warnings and errors |
+| `info` | Normal operation: UserOp submissions, confirmations, policy checks |
+| `debug` | UserOp full calldata, pre-validator details, bundler responses |
+| `trace` | Everything including keystore reads and MCP message payloads |
+
+**Log file location:**
+
+By default, logs go to stdout. To write to a file:
+
+```bash
+gateway start 2>&1 | tee ~/.echo/gateway.log
+```
+
+When running via Claude Desktop's MCP subprocess, gateway logs appear in Claude Desktop's developer console (Help → Toggle Developer Tools → Console tab, filter for "echo").
+
+---
+
+## Emergency pause
+
+If you suspect the agent is misbehaving, pause it immediately.
+
+**Option 1 — Via the agent (fastest):**
+
+```
+You: Pause all trading right now.
+Agent: [calls echo_pause_instance]
+Agent: I've initiated an emergency pause. Please sign the transaction in the dashboard.
+```
+
+The gateway applies a local software pause immediately (before the on-chain tx confirms), blocking further UserOp submissions.
+
+**Option 2 — Via the dashboard:**
+Navigate to `http://localhost:3000`, click the red **Emergency Pause** button on the home screen.
+
+**Option 3 — Directly on-chain (if gateway is unavailable):**
+
+```bash
+# Call PolicyRegistry.pauseInstance(instanceId) directly
+cast send 0xd5Db48763809061cFc283bF51Df1F158BD237120 \
+  "pauseInstance(bytes32)" YOUR_INSTANCE_ID \
+  --private-key YOUR_OWNER_PRIVATE_KEY \
+  --rpc-url $SEPOLIA_RPC_URL
+```
+
+Only the instance owner (the wallet used during onboarding) can pause via direct contract call.
+
+---
+
+## Bundler errors
+
+If the Pimlico bundler rejects a UserOp, the error will appear in the gateway logs and in the MCP tool response.
+
+**Common bundler rejections:**
+
+- `AA21 didn't pay prefund` — the gateway's paymaster is misconfigured or the Pimlico API key is invalid. Check `PIMLICO_API_KEY`.
+- `AA33 reverted (or out of gas)` — the `validateUserOp` call failed. Usually a policy violation that slipped past the pre-validator.
+- `AA34 signature error` — the execute key signature is invalid. Check `KEYSTORE_PASSPHRASE` and keystore integrity.
+
+**Check Pimlico dashboard:**
+Sign in at [dashboard.pimlico.io](https://dashboard.pimlico.io) and view your UserOp history for detailed rejection reasons.
+
+---
+
+## Common setup issues
+
+**"Gateway unreachable" in Claude Desktop:**
+1. Verify the gateway process is running: `ps aux | grep gateway`
+2. Check the port: `curl http://localhost:3000/health` should return `{"status":"ok"}`
+3. Make sure `GATEWAY_PORT` in the Claude Desktop MCP config matches the running gateway
+
+**"Cannot find module '@echo-protocol/gateway'":**
+Run `npm install -g @echo-protocol/gateway` and restart Claude Desktop.
+
+**Dashboard shows blank page:**
+Clear browser cache and hard-reload (`Ctrl+Shift+R` or `Cmd+Shift+R`). If the issue persists, check gateway logs for HTTP server errors.

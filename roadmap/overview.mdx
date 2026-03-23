@@ -1,0 +1,158 @@
+---
+title: "Roadmap"
+description: "Echo Protocol's development timeline — from Sepolia testnet today through multi-chain mainnet, protocol expansion, and EIP-8141 native integration."
+---
+
+Echo Protocol is in active development. This page outlines the planned milestones and the reasoning behind each phase.
+
+---
+
+## Q1 2026 — Sepolia testnet (current)
+
+**Status: Live**
+
+- Echo Gateway v1.0: MCP tools, dashboard, WalletConnect onboarding
+- EIP-7702 delegation via one-shot QR scan
+- ERC-4337 UserOps via Pimlico bundler
+- MetaPolicy (realtime mode) + SessionPolicy (autonomous mode)
+- Exploration Budget pattern
+- Uniswap V3 swaps: `exactInputSingle`, `exactOutputSingle`, `exactInput`
+- Policy templates: Conservative, Standard, Active
+- On-chain enforcement: `EchoPolicyValidator`, `PolicyRegistry`
+- Contract addresses: see [Contract Addresses](/api-reference/contract-addresses)
+
+---
+
+## Q2 2026 — Mainnet launch
+
+**Ethereum + Base + Arbitrum**
+
+The first mainnet deployments will target the three highest-liquidity EVM chains. Key work items:
+
+- Formal audit of `EchoDelegationModule`, `EchoPolicyValidator`, and `PolicyRegistry`
+- Mainnet contract deployments with timelocked upgrade paths
+- Real token support (USDC, WETH, DAI, WBTC, ARB, OP across all chains)
+- Pimlico mainnet bundler integration
+- Gas benchmarking and optimization (target: <20% overhead vs. direct EOA swap)
+- Dashboard mainnet mode with chain switcher
+
+<Note>
+  Mainnet contract addresses will be published in this documentation at launch. Subscribe to the Echo Protocol Discord or Twitter to be notified.
+</Note>
+
+---
+
+## Q3 2026 — Protocol expansion & Policy Marketplace
+
+### Multi-protocol support
+
+**Aave v3 (lending):**
+- `supply`, `withdraw`, `borrow`, `repay` operations
+- New policy dimensions: `maxLtv`, `minHealthFactor`
+- Agent use case: automated yield farming — supply idle USDC, borrow ETH when rates are favorable
+
+**Curve Finance:**
+- Stable swap execution via Curve pools
+- Lower slippage on stablecoin-to-stablecoin routes than Uniswap
+- Multi-hop routing that combines Curve + Uniswap in one UserOp
+
+**GMX v2 (perpetuals):**
+- Market and limit order creation
+- New policy dimensions: `maxLeverage`, `maxPositionSize`, `allowedMarkets`
+- Agent use case: automated hedging — open a short if portfolio delta exceeds threshold
+
+### Policy Marketplace
+
+The Policy Marketplace lets developers publish parameterized policy templates that other users can install in one click. Templates are registered as on-chain objects with metadata stored on IPFS.
+
+Examples:
+- "Conservative DCA Bot" — 50 USDC daily cap, USDC→ETH only, 0.3% slippage
+- "Yield Optimizer" — Aave supply + Uniswap rebalancing, 500 USDC daily, health factor floor 1.5
+- "Stablecoin Rebalancer" — USDC/DAI/USDT arbitrage, 1000 USDC daily, no leverage
+
+Template authors can set a usage fee charged per PolicyInstance creation.
+
+---
+
+## Q4 2026 — Policy NFTs
+
+Policy configurations become **transferable, composable ERC-721 tokens**.
+
+- A PolicyInstance can be minted as an NFT that encodes its parameters
+- NFTs can be transferred between wallets, enabling "agent inheritance" when switching wallets
+- NFTs can be composed — a user can hold multiple policy NFTs and combine their permissions
+- Secondary market: buy/sell pre-configured agent setups with proven track records
+- Agent DAOs: multi-sig owned policy NFTs where governance votes update parameters
+
+---
+
+## 2027+ — EIP-8141 (Frame Transactions)
+
+### What are Frame Transactions?
+
+EIP-8141 introduces a new Ethereum transaction type (`0x05`) called a **Frame Transaction**. Unlike standard transactions, a Frame Transaction is a container of multiple "frames" — each frame has its own:
+
+- `to` address and `calldata`
+- Independent gas limit
+- Optional validation contract (similar to ERC-4337's `validateUserOp`, but native to the L1)
+- Optional paymaster frame
+
+Frame Transactions are executed atomically: all frames succeed or all revert. They enable decentralized bundling without a centralized mempool like ERC-4337's `alt-mempool`.
+
+**Key properties:**
+- Native protocol support — no separate bundler infrastructure required
+- Each frame can target a different contract, enabling true multi-step atomic transactions
+- Paymasters are first-class, not bolted on via `callGasLimit` tricks
+- Validation contracts (`validateFrame`) run at the protocol level, not in EVM code called by a smart contract
+
+### How Echo will integrate EIP-8141
+
+When EIP-8141 lands on Ethereum mainnet, `EchoDelegationModule` is well-positioned to become a **frame validator**:
+
+```
+Frame Transaction (type 0x05)
+├── Frame 0: validateFrame → EchoDelegationModule (checks policy, signature)
+├── Frame 1: approve ERC-20 (if needed)
+└── Frame 2: swap on Uniswap
+```
+
+This removes the need for the ERC-4337 UserOp infrastructure entirely. The Pimlico bundler, `EntryPoint` contract, and UserOp mempool are replaced by the native Frame Transaction protocol.
+
+**Benefits Echo gains from EIP-8141:**
+
+| Area | ERC-4337 (current) | EIP-8141 (future) |
+|---|---|---|
+| Bundling | Centralized bundlers (Pimlico) | Native L1 mempool |
+| Overhead | ~100k gas for EntryPoint overhead | Protocol-native, lower overhead |
+| Atomicity | UserOp is single-call | True multi-frame atomicity |
+| Paymaster | CallGasLimit tricks | Native frame-level paymaster |
+| Decentralization | Depends on bundler availability | Network-native |
+
+### What EIP-8141 does NOT solve
+
+EIP-8141 is an execution efficiency improvement. It makes transactions cheaper, more atomic, and more decentralized. It does not address:
+
+- **Agent permission modeling** — who is allowed to submit frames on behalf of a user, and under what conditions?
+- **Policy enforcement** — per-tx spend limits, daily caps, token whitelists, slippage controls
+- **Session management** — scoped autonomous grants with expiry and budgets
+- **Audit trails** — on-chain intent logs for agent activity
+
+These are all things Echo's policy layer provides. **EIP-8141 makes Echo's execution layer cheaper and more decentralized; it does not replace the permission and budget layer.**
+
+Echo's differentiated value — the policy system, session model, and exploration budget pattern — remains fully applicable in an EIP-8141 world. `EchoDelegationModule` transitions from an ERC-4337 module to a frame validator, but its core logic (signature verification, policy lookup, spend accounting) is unchanged.
+
+<Tip>
+  Think of EIP-8141 as upgrading the plumbing. The policy system is the architecture of what gets built on top of that plumbing — and that architecture remains Echo's core contribution regardless of the execution primitive underneath.
+</Tip>
+
+---
+
+## Summary timeline
+
+| Quarter | Milestone |
+|---|---|
+| Q1 2026 | Sepolia testnet: Uniswap swaps, MetaPolicy, SessionPolicy |
+| Q2 2026 | Mainnet launch: Ethereum, Base, Arbitrum |
+| Q3 2026 | Multi-protocol (Aave, Curve, GMX) + Policy Marketplace |
+| Q4 2026 | Policy NFTs: transferable, composable permissions |
+| 2027+ | EIP-8141 Frame Transactions: native frame validator, lower gas |

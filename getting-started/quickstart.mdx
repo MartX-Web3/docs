@@ -1,0 +1,156 @@
+---
+title: "Quickstart"
+description: "Get Echo Protocol running and execute your first AI-driven DeFi swap in under 10 minutes."
+---
+
+<Note>
+  Echo Protocol is currently running on **Sepolia testnet**. All swaps in this guide use test tokens. Mainnet support is planned for Q2 2026.
+</Note>
+
+Echo Protocol lets AI agents execute DeFi swaps autonomously on behalf of users — without ever holding private keys or requiring pre-deposited funds. This guide gets you from zero to your first agent-executed swap.
+
+## Prerequisites
+
+- Node.js 18 or later
+- A Claude Desktop installation (or any MCP-compatible AI client)
+- A mobile wallet that supports EIP-7702 (MetaMask Mobile, OKX Wallet, or Rainbow)
+- A small amount of Sepolia ETH for gas (get some from [sepoliafaucet.com](https://sepoliafaucet.com))
+
+---
+
+<Steps>
+
+<Step title="Install and start the gateway">
+
+Install the Echo Gateway globally or run it with `npx`:
+
+<Tabs>
+  <Tab title="Global install">
+    ```bash
+    npm install -g @echo-protocol/gateway
+    ```
+
+    Create a `.env` file in your working directory:
+
+    ```bash .env
+    SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+    PIMLICO_API_KEY=your_pimlico_api_key
+    KEYSTORE_PASSPHRASE=choose-a-strong-passphrase
+    GATEWAY_PORT=3000
+    ```
+
+    Start the gateway:
+
+    ```bash
+    gateway start
+    ```
+  </Tab>
+  <Tab title="npx (no install)">
+    Set your environment variables inline or via a `.env` file, then run:
+
+    ```bash
+    SEPOLIA_RPC_URL=https://... \
+    PIMLICO_API_KEY=your_key \
+    KEYSTORE_PASSPHRASE=your-passphrase \
+    npx @echo-protocol/gateway
+    ```
+  </Tab>
+</Tabs>
+
+The gateway starts at `http://localhost:3000`. You should see:
+
+```
+Echo Gateway running on port 3000
+MCP server ready
+Dashboard available at http://localhost:3000
+```
+
+You will need two API keys before starting:
+
+- **Alchemy or Infura RPC**: get a free Sepolia endpoint at [alchemy.com](https://alchemy.com)
+- **Pimlico API key**: get one at [dashboard.pimlico.io](https://dashboard.pimlico.io) (free tier available)
+
+</Step>
+
+<Step title="Configure Claude Desktop">
+
+Open your Claude Desktop configuration file:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add the Echo Gateway MCP server:
+
+```json claude_desktop_config.json
+{
+  "mcpServers": {
+    "echo-gateway": {
+      "command": "npx",
+      "args": ["-y", "@echo-protocol/gateway"],
+      "env": {
+        "KEYSTORE_PASSPHRASE": "your-passphrase",
+        "PIMLICO_API_KEY": "your-pimlico-api-key",
+        "SEPOLIA_RPC_URL": "https://eth-sepolia.g.alchemy.com/v2/your-alchemy-key"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving. You should see "echo-gateway" listed in the MCP tools panel.
+
+<Tip>
+  If you already have the gateway running as a standalone process, you can point Claude Desktop at it via the HTTP transport instead of spawning a new process. See [Gateway Configuration](/api-reference/gateway-config) for details.
+</Tip>
+
+</Step>
+
+<Step title="Complete onboarding, then try your first swap">
+
+Before the agent can execute swaps, you need to complete a one-time onboarding step. Open the dashboard at `http://localhost:3000`, create your account, choose a policy template, and activate EIP-7702 delegation via WalletConnect.
+
+Full onboarding instructions are in the [Onboarding guide](/getting-started/onboarding).
+
+Once onboarding is complete, open Claude Desktop and try the following:
+
+**You:** `Swap 10 USDC to ETH on my behalf`
+
+**Claude (internally):**
+
+```
+1. Calling echo_get_context...
+   → Returns instanceId, EOA address, policy addresses
+
+2. Calling echo_submit_intent with:
+   tokenIn:  0xBa9D46448e4142AC7a678678eFf6882D9197d716  (USDC)
+   tokenOut: 0xF0527287E6B7570BdaaDe7629C47D60a3e0eF104  (WETH)
+   amount:   10000000  (10 USDC, 6 decimals)
+   direction: exactInput
+```
+
+**Claude:** `Done! Swapped 10 USDC for approximately 0.0031 ETH. Transaction: 0xabc123...`
+
+The swap is executed as a UserOperation via the Pimlico bundler. Tokens move directly out of your EOA — no smart account deposit required.
+
+</Step>
+
+</Steps>
+
+---
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Onboarding" icon="user-check" href="/getting-started/onboarding">
+    Complete the one-time setup: create a policy instance and activate EIP-7702 delegation via WalletConnect.
+  </Card>
+  <Card title="EIP-7702 & Zero Prefunding" icon="bolt" href="/core-concepts/eip-7702">
+    Understand how Echo keeps tokens in your EOA while giving agents swap permission.
+  </Card>
+  <Card title="Policy System" icon="shield-check" href="/core-concepts/policy">
+    Learn how MetaPolicy and SessionPolicy let you control exactly what the agent can do.
+  </Card>
+  <Card title="MCP Tools" icon="wrench" href="/api-reference/mcp-tools">
+    Full reference for all 8 MCP tools available to AI agents.
+  </Card>
+</CardGroup>

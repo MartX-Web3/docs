@@ -1,0 +1,430 @@
+---
+title: "MCP Tools"
+description: "Complete reference for all 8 MCP tools exposed by the Echo Gateway to AI agents."
+---
+
+The Echo Gateway exposes 8 tools over the Model Context Protocol (MCP). AI agents (Claude, GPT, etc.) call these tools to interact with the Echo Protocol — reading context, executing swaps, managing sessions, and handling emergencies.
+
+<Note>
+  Always call `echo_get_context` first in any conversation. It returns the `instanceId` needed by other tools and confirms the gateway is reachable.
+</Note>
+
+---
+
+## echo_get_context
+
+Returns the current gateway context: instance ID, user EOA address, owner wallet address, and policy contract addresses. Call this before any other tool.
+
+**Parameters:** None
+
+**Returns:**
+
+<ResponseField name="instanceId" type="string">
+  The bytes32 hex identifier of the active PolicyInstance.
+</ResponseField>
+
+<ResponseField name="eoa" type="string">
+  The user's Ethereum address (the UserOp sender for all swaps).
+</ResponseField>
+
+<ResponseField name="ownerWallet" type="string">
+  The wallet address that controls policy updates (set during onboarding).
+</ResponseField>
+
+<ResponseField name="policyRegistry" type="string">
+  Address of the PolicyRegistry contract.
+</ResponseField>
+
+<ResponseField name="echoPolicyValidator" type="string">
+  Address of the EchoPolicyValidator contract.
+</ResponseField>
+
+<ResponseField name="echoDelegationModule" type="string">
+  Address of the EchoDelegationModule contract.
+</ResponseField>
+
+**Example:**
+
+```json
+// Tool call
+{ "name": "echo_get_context", "arguments": {} }
+
+// Response
+{
+  "instanceId": "0xabc123...def456",
+  "eoa": "0xYourEthereumAddress",
+  "ownerWallet": "0xYourMobileWalletAddress",
+  "policyRegistry": "0xd5Db48763809061cFc283bF51Df1F158BD237120",
+  "echoPolicyValidator": "0xe4fecb0138Ff8E7aDC72b1F142fcbdCAcF12F554",
+  "echoDelegationModule": "0x9aeAF3881FC24A639434C4e849C52341E8b1cc15"
+}
+```
+
+**Conversational example:**
+
+```
+You: What's my wallet address?
+Agent: [calls echo_get_context]
+Agent: Your EOA is 0xYourEthereumAddress. Your instance ID is 0xabc123...
+```
+
+---
+
+## echo_submit_intent
+
+Execute a swap immediately using realtime mode. The gateway builds a UserOperation, has it validated by `EchoPolicyValidator`, and submits it to the Pimlico bundler. Returns the transaction hash when confirmed.
+
+**Parameters:**
+
+<ParamField body="tokenIn" type="string" required>
+  ERC-20 contract address of the token to swap from.
+</ParamField>
+
+<ParamField body="tokenOut" type="string" required>
+  ERC-20 contract address of the token to swap to.
+</ParamField>
+
+<ParamField body="amount" type="string" required>
+  Amount in token units as a decimal string. Use the token's native decimals (e.g., USDC has 6 decimals, so 10 USDC = `"10000000"`).
+</ParamField>
+
+<ParamField body="direction" type="string" required>
+  Either `"exactInput"` (spend exactly `amount` of `tokenIn`) or `"exactOutput"` (receive exactly `amount` of `tokenOut`).
+</ParamField>
+
+<ParamField body="instanceId" type="string">
+  The PolicyInstance ID. If omitted, the gateway uses the active instance from `context.json`.
+</ParamField>
+
+<ParamField body="slippageBps" type="number">
+  Slippage tolerance in basis points. Default: `50` (0.5%). Must be within your policy's `slippageCap`.
+</ParamField>
+
+<ParamField body="feeTier" type="number">
+  Uniswap V3 fee tier (e.g., `500`, `3000`, `10000`). If omitted, the gateway auto-detects the deepest pool.
+</ParamField>
+
+**Returns:** Transaction hash (string) when confirmed on-chain.
+
+**Example:**
+
+```json
+// Swap exactly 10 USDC for WETH
+{
+  "name": "echo_submit_intent",
+  "arguments": {
+    "tokenIn": "0xBa9D46448e4142AC7a678678eFf6882D9197d716",
+    "tokenOut": "0xF0527287E6B7570BdaaDe7629C47D60a3e0eF104",
+    "amount": "10000000",
+    "direction": "exactInput",
+    "slippageBps": 50
+  }
+}
+
+// Response
+{
+  "txHash": "0xabcdef1234567890..."
+}
+```
+
+**Conversational example:**
+
+```
+You: Swap 10 USDC to ETH
+Agent: [calls echo_get_context, then echo_submit_intent]
+Agent: Done! Swapped 10 USDC for 0.0031 WETH. Transaction: 0xabcdef...
+```
+
+---
+
+## echo_create_session
+
+Create a `SessionPolicy` that grants the agent autonomous recurring execution rights for a specific token pair. Returns a `pendingTx` object that the user must sign once via the dashboard.
+
+**Parameters:**
+
+<ParamField body="tokenIn" type="string" required>
+  Input token address for this session.
+</ParamField>
+
+<ParamField body="tokenOut" type="string" required>
+  Output token address for this session.
+</ParamField>
+
+<ParamField body="maxAmountPerOp" type="string" required>
+  Maximum amount per single operation, in token units. Cannot exceed MetaPolicy `perTxMax`.
+</ParamField>
+
+<ParamField body="totalBudget" type="string" required>
+  Total cumulative spend cap for the entire session lifetime, in token units.
+</ParamField>
+
+<ParamField body="maxOpsPerDay" type="number" required>
+  Maximum number of operations the agent may execute per calendar day within this session.
+</ParamField>
+
+<ParamField body="sessionExpiry" type="number" required>
+  Unix timestamp (in seconds) when the session automatically expires.
+</ParamField>
+
+<ParamField body="instanceId" type="string">
+  PolicyInstance ID. Defaults to the active instance.
+</ParamField>
+
+**Returns:** A `pendingTx` object for the user to sign in the dashboard.
+
+**Example:**
+
+```json
+// DCA 50 USDC into ETH over 7 days, max 10 USDC/day
+{
+  "name": "echo_create_session",
+  "arguments": {
+    "tokenIn": "0xBa9D46448e4142AC7a678678eFf6882D9197d716",
+    "tokenOut": "0xF0527287E6B7570BdaaDe7629C47D60a3e0eF104",
+    "maxAmountPerOp": "10000000",
+    "totalBudget": "50000000",
+    "maxOpsPerDay": 1,
+    "sessionExpiry": 1745280000
+  }
+}
+
+// Response
+{
+  "pendingTx": {
+    "to": "0xd5Db48763809061cFc283bF51Df1F158BD237120",
+    "data": "0x...",
+    "description": "Activate session: DCA 10 USDC/day into WETH for 7 days"
+  },
+  "sessionId": "0xsession123..."
+}
+```
+
+**Conversational example:**
+
+```
+You: Set up a DCA strategy — buy 10 USDC worth of ETH every day for a week.
+Agent: [calls echo_create_session]
+Agent: I've prepared a session for 7 daily 10-USDC swaps into WETH.
+       Please sign the activation transaction in your Echo dashboard.
+       Once signed, I'll execute the first swap today and continue daily.
+```
+
+---
+
+## echo_execute_session
+
+Execute one operation within an existing active session. No user confirmation is required — the session key signs the UserOp autonomously.
+
+**Parameters:**
+
+<ParamField body="sessionId" type="string" required>
+  The bytes32 session ID returned by `echo_create_session`.
+</ParamField>
+
+<ParamField body="amount" type="string" required>
+  Amount for this operation, in token units. Must not exceed `maxAmountPerOp` for the session.
+</ParamField>
+
+<ParamField body="instanceId" type="string">
+  PolicyInstance ID. Defaults to the active instance.
+</ParamField>
+
+<ParamField body="slippageBps" type="number">
+  Slippage tolerance in basis points. Default: `50`.
+</ParamField>
+
+**Returns:** Transaction hash when confirmed.
+
+**Example:**
+
+```json
+{
+  "name": "echo_execute_session",
+  "arguments": {
+    "sessionId": "0xsession123...",
+    "amount": "10000000"
+  }
+}
+
+// Response
+{
+  "txHash": "0xabcdef...",
+  "sessionRemainingBudget": "40000000",
+  "sessionOpsToday": 1
+}
+```
+
+---
+
+## echo_list_sessions
+
+List all active sessions for the current PolicyInstance.
+
+**Parameters:**
+
+<ParamField body="instanceId" type="string">
+  PolicyInstance ID. Defaults to the active instance.
+</ParamField>
+
+**Returns:** Array of session objects with ID, token pair, budget remaining, ops today, and expiry.
+
+**Example:**
+
+```json
+// Tool call
+{ "name": "echo_list_sessions", "arguments": {} }
+
+// Response
+{
+  "sessions": [
+    {
+      "sessionId": "0xsession123...",
+      "tokenIn": "0xBa9D46...  (USDC)",
+      "tokenOut": "0xF05272... (WETH)",
+      "maxAmountPerOp": "10000000",
+      "remainingBudget": "40000000",
+      "opsToday": 1,
+      "maxOpsPerDay": 1,
+      "expiresAt": "2026-03-30T00:00:00Z",
+      "active": true
+    }
+  ]
+}
+```
+
+---
+
+## echo_revoke_session
+
+Revoke an active session immediately. Returns a `pendingTx` for the user to sign via the dashboard. After signing, the session is closed on-chain and no further ops can execute against it.
+
+**Parameters:**
+
+<ParamField body="sessionId" type="string" required>
+  The bytes32 ID of the session to revoke.
+</ParamField>
+
+**Returns:** A `pendingTx` object for the user to sign.
+
+**Example:**
+
+```json
+{
+  "name": "echo_revoke_session",
+  "arguments": {
+    "sessionId": "0xsession123..."
+  }
+}
+
+// Response
+{
+  "pendingTx": {
+    "to": "0xd5Db48763809061cFc283bF51Df1F158BD237120",
+    "data": "0x...",
+    "description": "Revoke session 0xsession123..."
+  }
+}
+```
+
+**Conversational example:**
+
+```
+You: Stop the DCA strategy.
+Agent: [calls echo_revoke_session]
+Agent: I've prepared the revocation transaction.
+       Please sign it in your Echo dashboard to stop the session immediately.
+```
+
+---
+
+## echo_get_policy
+
+Read the current state of the active PolicyInstance: MetaPolicy parameters, remaining daily budget, daily spend so far, and session count.
+
+**Parameters:**
+
+<ParamField body="instanceId" type="string">
+  PolicyInstance ID. Defaults to the active instance.
+</ParamField>
+
+**Returns:** Full policy state including remaining budgets.
+
+**Example:**
+
+```json
+// Tool call
+{ "name": "echo_get_policy", "arguments": {} }
+
+// Response
+{
+  "instanceId": "0xabc123...",
+  "paused": false,
+  "dailyCap": "1000000000",
+  "perTxMax": "200000000",
+  "slippageCap": 100,
+  "tokenWhitelist": [
+    "0xBa9D46448e4142AC7a678678eFf6882D9197d716",
+    "0xF0527287E6B7570BdaaDe7629C47D60a3e0eF104"
+  ],
+  "dailySpend": "10000000",
+  "remainingDailyBudget": "990000000",
+  "activeSessions": 1,
+  "dailyResetAt": "2026-03-24T00:00:00Z"
+}
+```
+
+**Conversational example:**
+
+```
+You: How much of my daily budget is left?
+Agent: [calls echo_get_policy]
+Agent: You've spent 10 USDC today out of a 1,000 USDC daily cap.
+       You have 990 USDC remaining until midnight UTC.
+```
+
+---
+
+## echo_pause_instance
+
+Emergency pause. Immediately flags the PolicyInstance as paused on-chain. All subsequent agent operations are rejected by `EchoPolicyValidator` until the instance is unpaused from the dashboard.
+
+Returns a `pendingTx` for the user to sign. The pause takes effect only after the transaction is confirmed — for an instant software-level pause, the gateway also sets a local flag to reject ops before the tx confirms.
+
+**Parameters:**
+
+<ParamField body="instanceId" type="string">
+  PolicyInstance ID. Defaults to the active instance.
+</ParamField>
+
+**Returns:** A `pendingTx` object for the user to sign via the dashboard.
+
+**Example:**
+
+```json
+{ "name": "echo_pause_instance", "arguments": {} }
+
+// Response
+{
+  "pendingTx": {
+    "to": "0xd5Db48763809061cFc283bF51Df1F158BD237120",
+    "data": "0x...",
+    "description": "Pause instance 0xabc123..."
+  },
+  "localPauseActive": true
+}
+```
+
+**Conversational example:**
+
+```
+You: Something looks wrong — stop all trading immediately.
+Agent: [calls echo_pause_instance]
+Agent: I've initiated an emergency pause. All further swaps are blocked
+       locally right now. Please sign the pause transaction in your
+       Echo dashboard to make it permanent on-chain.
+```
+
+<Warning>
+  To unpause, you must visit the Echo dashboard and submit an unpause transaction via WalletConnect. The agent cannot unpause on its own — this is intentional.
+</Warning>

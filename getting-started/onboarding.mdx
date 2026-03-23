@@ -1,0 +1,135 @@
+---
+title: "Onboarding"
+description: "One-time setup to create your policy instance and activate EIP-7702 delegation so AI agents can execute swaps on your behalf."
+---
+
+Onboarding takes about 2 minutes and only happens once. After completing it, your AI agent can execute swaps immediately — no further wallet interaction required per transaction.
+
+<Note>
+  Echo uses WalletConnect to connect your wallet, ensuring compatible EIP-7702 authorization signing. No private key is ever exposed to the gateway — signing happens entirely inside your mobile wallet.
+</Note>
+
+---
+
+<Steps>
+
+<Step title="Open the dashboard">
+
+Start the Echo Gateway if it is not already running:
+
+```bash
+gateway start
+# or
+npx @echo-protocol/gateway
+```
+
+Open your browser and navigate to:
+
+```
+http://localhost:3000
+```
+
+You will see the Echo Protocol dashboard welcome screen.
+
+</Step>
+
+<Step title="Create your account and choose a policy template">
+
+Click **Create Account** and enter a display name for your agent instance. You will then be prompted to choose a **policy template** — this defines the spending limits and rules the AI agent must stay within.
+
+| Template | Daily Cap | Per-Tx Max | Slippage Cap | Best For |
+|---|---|---|---|---|
+| **Conservative** | 100 USDC | 20 USDC | 0.5% | New users, testing |
+| **Standard** | 1,000 USDC | 200 USDC | 1% | Regular DeFi usage |
+| **Active** | 10,000 USDC | 2,000 USDC | 2% | Power users, larger positions |
+
+All templates whitelist USDC, WETH, and DAI by default. You can customize token whitelists and limits in the dashboard after onboarding.
+
+<Tip>
+  Start with **Conservative** if you are new to Echo. You can upgrade to a higher template at any time from the dashboard — it takes effect immediately on-chain.
+</Tip>
+
+</Step>
+
+<Step title="Activate EIP-7702 delegation via WalletConnect">
+
+This is the core security step. Echo needs to install a delegation contract on your Ethereum address so that future UserOperations can be validated and executed without you signing each one.
+
+**How it works:**
+
+The delegation is activated via a single **type-4 (EIP-7702) transaction**, which simultaneously:
+1. Installs the `EchoDelegationModule` as the delegation target on your EOA
+2. Registers your `PolicyInstance` on-chain via `EchoOnboarding`
+
+After this transaction is confirmed, the delegation is **permanent** — you will never need to sign another activation. Every future swap is a UserOperation signed by the gateway's execute key, validated against your policy on-chain.
+
+**Activation steps:**
+
+1. Click **Activate Delegation** in the dashboard
+2. A QR code appears — this is a one-shot WalletConnect session
+3. Open your mobile wallet and scan the QR code:
+   - MetaMask Mobile: tap the scan icon in the top-right
+   - OKX Wallet: tap the QR scanner in the wallet tab
+   - Rainbow: tap the scanner from the home screen
+4. Your wallet shows you the activation transaction for review — verify the contract address matches `EchoOnboarding: 0x6622fe1A7612Dc85aAd42F2D326a7a7572aB4805`
+5. Approve the transaction in your wallet
+6. The WalletConnect session disconnects automatically — this is expected
+7. The dashboard shows **Delegation Active** once the transaction confirms (~15 seconds on Sepolia)
+
+<Warning>
+  Your mobile wallet must hold a small amount of **Sepolia ETH** to pay for the activation transaction gas. The activation tx costs approximately 150,000–200,000 gas. Get Sepolia ETH from [sepoliafaucet.com](https://sepoliafaucet.com) or [faucet.quicknode.com/ethereum/sepolia](https://faucet.quicknode.com/ethereum/sepolia).
+</Warning>
+
+**Why a QR scan and not a browser wallet?**
+
+Browser-based wallets (MetaMask browser extension, etc.) do not currently expose a standalone `eth_signAuthorization` method. EIP-7702 type-4 transactions are only supported through mobile wallet apps that have implemented the full spec. The WalletConnect QR flow is the most reliable cross-wallet approach available today.
+
+</Step>
+
+<Step title="Verify your agent is ready">
+
+Once the delegation transaction is confirmed, the dashboard displays:
+
+- **Status:** Delegation Active
+- **EOA Address:** your Ethereum address
+- **Instance ID:** a unique bytes32 identifier for your policy instance
+- **Policy Template:** the template you selected
+- **Execute Key:** a gateway-managed key (encrypted at rest) that signs UserOps on your behalf
+
+You can now go to Claude Desktop (or any MCP-compatible AI client) and ask it to execute a swap. The agent will call `echo_get_context` to retrieve your instance details and then call `echo_submit_intent` to submit the swap.
+
+Try it:
+
+```
+You: Swap 5 USDC to ETH
+```
+
+Claude will call the gateway tools and return a transaction hash when the swap is confirmed.
+
+</Step>
+
+</Steps>
+
+---
+
+## Policy instance management
+
+After onboarding you can:
+
+- **View remaining daily budget** — shown on the dashboard home screen and available via `echo_get_policy`
+- **Pause the agent** — click Pause in the dashboard or ask the agent to call `echo_pause_instance`; all further ops are rejected until you unpause
+- **Create a session** — grant the agent autonomous permission to execute a batch of swaps without per-op confirmations; see [SessionPolicy](/core-concepts/policy#sessionpolicy)
+- **Change your policy template** — submit a new `PolicyInstance` registration with updated parameters
+
+---
+
+## FAQ
+
+**Can I use the same EOA on multiple devices?**
+Yes. The `PolicyInstance` and delegation live on-chain, and the gateway keystore is portable. Copy your `.env` and keystore directory to the new machine and restart.
+
+**What happens if I lose the gateway passphrase?**
+The execute key is encrypted with your `KEYSTORE_PASSPHRASE`. If you lose it, you cannot recover the execute key — but your funds are never at risk. Simply pause the instance from the dashboard (using your wallet) and create a new one with a fresh execute key.
+
+**Can I revoke the EIP-7702 delegation?**
+Yes. Send a type-4 transaction with the delegation address set to `0x0000000000000000000000000000000000000000`. This removes the delegation code from your EOA. See [Debugging](/advanced/debugging#revoking-eip-7702-delegation) for instructions.

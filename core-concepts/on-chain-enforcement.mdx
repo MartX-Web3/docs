@@ -1,0 +1,152 @@
+---
+title: "On-Chain Enforcement"
+description: "How EchoPolicyValidator, PolicyRegistry, and EchoDelegationModule enforce spending limits and access controls at the blockchain level."
+---
+
+Echo's policy system is not enforced purely by the gateway software — it is enforced **on-chain**, on every UserOperation, before execution. This means that even if the gateway is misconfigured, compromised, or replaced, the blockchain layer still protects your funds.
+
+---
+
+## EchoPolicyValidator
+
+`EchoPolicyValidator` is the on-chain contract that validates every UserOperation before it can execute. It is called by `EchoDelegationModule.validateUserOp()` as part of the ERC-4337 validation phase.
+
+**Contract address (Sepolia):** `0xe4fecb0138Ff8E7aDC72b1F142fcbdCAcF12F554`
+
+### Validation sequence
+
+For every UserOp, the validator runs the following checks in order:
+
+```
+1. Signature check
+   └─ Is the signature prefix 0x03 (realtime) or 0x02 (session)?
+   └─ Does the recovered signer match the registered execute key / session key?
+
+2. Pause check
+   └─ Is instance.paused == false?
+   └─ If paused: revert POLICY_PAUSED
+
+3. Token whitelist check
+   └─ Is tokenIn in the instance's token whitelist?
+   └─ Is tokenOut in the instance's token whitelist?
+   └─ If not: revert POLICY_VIOLATED
+
+4. Per-transaction limit check
+   └─ Is amount <= perTxMax?
+   └─ If exceeded: revert POLICY_VIOLATED
+
+5. Daily spend check
+   └─ Has the rolling 24h spend + amount exceeded dailyCap?
+   └─ If exceeded: revert POLICY_VIOLATED
+
+6. Slippage check
+   └─ Is the UserOp's slippageBps <= policy slippageCap?
+   └─ If exceeded: revert POLICY_VIOLATED
+
+7. Session-specific checks (if signature prefix = 0x02)
+   └─ Is the session expired? (block.timestamp > sessionExpiry)
+   └─ Has totalBudget been exhausted?
+   └─ Has maxOpsPerDay been reached today?
+   └─ If any: revert SESSION_EXPIRED or POLICY_VIOLATED
+```
+
+All checks are stateless reads from `PolicyRegistry` combined with the on-chain daily spend counter. The daily spend counter is updated atomically when a UserOp executes successfully.
+
+### Pre-flight validation in the gateway
+
+The gateway's `PreValidator.ts` runs the same logic off-chain before submitting a UserOp. This avoids wasting gas on UserOps that will fail on-chain. However, the off-chain pre-validation is a convenience — the on-chain validator is the authoritative source of truth and cannot be bypassed.
+
+---
+
+## PolicyRegistry
+
+`PolicyRegistry` is the on-chain storage layer for all policy data.
+
+**Contract address (Sepolia):** `0xd5Db48763809061cFc283bF51Df1F158BD237120`
+
+It stores two types of records:
+
+### PolicyInstance
+
+A `PolicyInstance` represents one user's configuration. It is created during onboarding and contains:
+
+- Owner address (the EOA)
+- Execute key address (the gateway key, not a private key — only the public address is on-chain)
+- MetaPolicy parameters (`dailyCap`, `perTxMax`, `tokenWhitelist`, `slippageCap`, `paused`)
+- Running daily spend counter and last reset timestamp
+
+Instances are identified by a `bytes32` instance ID, derived from the owner address and a nonce.
+
+### SessionPolicy
+
+A `SessionPolicy` is attached to a `PolicyInstance` and represents an active autonomous grant. It stores:
+
+- `tokenIn` / `tokenOut` pair
+- `maxAmountPerOp`, `totalBudget`, `maxOpsPerDay`, `sessionExpiry`
+- Session key address (public address only — private key stays in the gateway)
+- Running spend counter and ops-today counter
+
+Multiple sessions can be active on the same instance simultaneously. Each is identified by a `bytes32` session ID.
+
+---
+
+## Signature validation
+
+`EchoDelegationModule` reads the first byte of the UserOp signature to determine the validation path:
+
+| Prefix | Mode | Signature format | Who signs |
+|---|---|---|---|
+| `0x03` | Realtime | `[0x03][executeKey (32 bytes)]` | Gateway execute key |
+| `0x02` | Session | `[0x02][sessionId (32 bytes)][sessionKey (32 bytes)]` | Gateway session key |
+
+For `0x03` (realtime), the validator:
+1. Strips the prefix
+2. Recovers the signer from the UserOp hash
+3. Checks `recoveredSigner == instance.executeKey`
+
+For `0x02` (session), the validator:
+1. Extracts `sessionId` from bytes 1–32
+2. Looks up the session in `PolicyRegistry`
+3. Recovers the signer from the UserOp hash
+4. Checks `recoveredSigner == session.sessionKey`
+5. Runs all session budget checks
+
+If either check fails, the entire UserOp reverts with no state changes and no gas charged to the user.
+
+---
+
+## Why on-chain enforcement matters
+
+Consider what happens if the gateway is compromised:
+
+**Without on-chain enforcement:**
+An attacker who gains access to the execute key could swap all your tokens, ignore limits, trade non-whitelisted tokens, or drain your wallet.
+
+**With on-chain enforcement:**
+An attacker who gains the execute key can only submit UserOps that:
+- Use tokens in your whitelist
+- Stay within your per-tx limit
+- Stay within your daily cap
+- Use slippage within your cap
+- Only operate while the instance is not paused
+
+The maximum damage is bounded by your policy parameters. The attacker cannot exceed your `dailyCap` even if they submit thousands of UserOps — the validator tracks the daily spend counter on-chain and rejects ops that would exceed it.
+
+This is the core security guarantee: **policy limits are enforced at the chain level, not by the gateway**.
+
+---
+
+## IntentRegistry
+
+`IntentRegistry` provides an append-only audit log of all executed intents.
+
+**Contract address (Sepolia):** `0x9c3c066a6dCbD5ea565171D61F7965B6319567fc`
+
+Every successful swap emits an `IntentExecuted` event with:
+- Instance ID
+- Token in/out
+- Amount
+- Timestamp
+- UserOp hash
+
+This gives you a complete, tamper-proof history of all agent activity, independently queryable from any Ethereum node.
